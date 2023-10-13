@@ -209,8 +209,8 @@ class DA_KPN(nn.Module):
         #self.encoder.load_state_dict(weights, strict=True)
 
         # TODO: Change to 19 classes instead of 1000
-        #self.kpn = nn.Conv2d(19, num_params, 1)
-        self.kpn = nn.Conv2d(1000, num_params, 1)
+        self.kpn = nn.Conv2d(19, num_params, 1)
+        #self.kpn = nn.Conv2d(1000, num_params, 1)
 
         # Initial KPN params should give identity
         nn.init.constant_(self.kpn.weight.data, 0)

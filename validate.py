@@ -22,14 +22,13 @@ weight_save_dir = '/raid/cristinam/da_kpn_experiments/saved_models/segformer/'
 model_type = 'segformer'
 eval_mode = 'iter' # iter or epoch
 checkpoints = list(range(0, 25000, 1000))
-full_resolution = [720, 1280]
 low_resolution = [96, 160]
 patch_scale_factor = 8
-kernel_size = (90, 160)
-stride = (90, 160)
-fold_params = {"kernel_size": kernel_size,
-               "stride": stride,
-               }
+# kernel_size = (90, 160)
+# stride = (90, 160)
+# fold_params = {"kernel_size": kernel_size,
+#                "stride": stride,
+#                }
 num_params = 12
 num_classes = 19
 save_preds = True
@@ -38,7 +37,7 @@ save_parameters = True
 eval_iou = False
 
 # Data
-val_set = CityscapesGTADataset('val', full_resolution, low_resolution, patch_scale_factor, fold_params, model_type)
+val_set = CityscapesGTADataset('val', low_resolution, patch_scale_factor, model_type)
 val_loader = DataLoader(val_set,
                         batch_size=1,
                         shuffle=False)
@@ -73,7 +72,7 @@ for ckpt in checkpoints:
             if i > 1:
                 break
             # data gives small res synthetic image, full res synthetic patches, synth image name
-            low_res_synth_img, encoder_img, seg_lb, full_res_synth_patches, full_res_noise_patches, synth_name = data
+            low_res_synth_img, encoder_img, seg_lb, full_res_synth_patches, full_res_noise_patches, synth_name, (original_h, original_w) = data
             low_res_synth_img, encoder_img, seg_lb, full_res_synth_patches, full_res_noise_patches = low_res_synth_img.cuda(), encoder_img.cuda(), seg_lb.cuda(), full_res_synth_patches.cuda(), full_res_noise_patches.cuda()
             num_patches = full_res_synth_patches.shape[-1]
             if model_type == 'fcn':
@@ -94,17 +93,17 @@ for ckpt in checkpoints:
             full_transformed = torch.zeros(3, 90, 160, num_patches)
 
             for j in range(num_patches):
-                transformed_patch = apply_affine_transformation(params_low_res_patches[:, j, :, :, :], full_res_synth_patches.reshape(1, 3, kernel_size[0], kernel_size[1], -1)[:, :, :, :, j])
+                transformed_patch = apply_affine_transformation(params_low_res_patches[:, j, :, :, :], full_res_synth_patches.reshape(1, 3, original_h//patch_scale_factor, original_w//patch_scale_factor, -1)[:, :, :, :, j])
                 transformed_patch = local_gaussian_blur(transformed_patch, params_low_res_patches[:, j, :, :, :])
                 transformed_patch = apply_noise_transformation(params_low_res_patches[:, j, :, :, :], transformed_patch,
-                                                               full_res_noise_patches[:, :, :, j].reshape(1, 3, kernel_size[0], kernel_size[1]))
+                                                               full_res_noise_patches[:, :, :, j].reshape(1, 3, original_h//patch_scale_factor, original_w//patch_scale_factor))
 
                 full_transformed[:, :, :, j] = transformed_patch[0]
                 synth_disc_out = model.disc_forward(transformed_patch)
                 synth_disc_acc += torch.sum(synth_disc_out < 0.5) / synth_disc_out.flatten().shape[0]
             if save_preds:
                 # Save full transformed image
-                fold_transformed = nn.Fold(output_size=full_resolution, kernel_size=(kernel_size[0], kernel_size[1]), stride=stride)(full_transformed.reshape(1, -1, num_patches))
+                fold_transformed = nn.Fold(output_size=(original_h, original_w), kernel_size=(original_h//patch_scale_factor, original_w//patch_scale_factor), stride=(original_h//patch_scale_factor, original_w//patch_scale_factor))(full_transformed.reshape(1, -1, num_patches))
                 to_pil_image(torch.clamp(fold_transformed[0], 0, 1)).save(os.path.join('preds', '{0}_{1}_'.format(eval_mode, ckpt)+synth_name[0].split('/')[-1]))
             if save_features:
                 # Save features from network
@@ -118,9 +117,8 @@ for ckpt in checkpoints:
             if save_parameters:
                 print("Saving parameter")
                 # Save parameter channels
-                full_res_params = nn.Upsample(full_resolution, mode='bilinear', align_corners=False)(params)
+                full_res_params = nn.Upsample((original_h, original_w), mode='bilinear', align_corners=False)(params)
                 for p in range(num_params):
-                    #to_pil_image(full_res_params[0, p, :, :]).save('preds/param_{0}_{1}_{2}_'.format(eval_mode, ckpt, p)+synth_name[0].split('/')[-1])
                     save_image(full_res_params[0, p, :, :], 'preds/param_{0}_{1}_{2}_'.format(eval_mode, ckpt, p)+synth_name[0].split('/')[-1])
     if eval_iou:
         preds = torch.stack(preds).cpu().numpy()

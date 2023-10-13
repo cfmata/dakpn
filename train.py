@@ -20,20 +20,15 @@ from segmentation.cityscapes_segmentation_dataset import palette
 from celeba_dataset import CelebAFaceSynthetics
 
 # Hyperparameters
-use_wandb = True
+use_wandb = False
 if use_wandb:
     wandb.init(project="kpn_vidseg")
 max_epochs = 100
 weight_save_dir = '/raid/cristinam/da_kpn_experiments/saved_models/segformer'
 epoch_save_rate = 1
 iter_save_rate = 1000
-full_resolution = [720, 1280]
 low_resolution = [96, 160]
 patch_scale_factor = 8
-kernel_size = (90, 160)
-stride = (90, 160)
-fold_params = {"kernel_size": kernel_size,
-               "stride": stride}
 num_params = 12
 batch_size = 8
 num_classes = 19
@@ -44,12 +39,12 @@ save_preds = False
 pred_dir = '/homes/cristinam/image_translation/preds'
 
 # Dataset loading
-train_set = CityscapesGTADataset('train', full_resolution, low_resolution, patch_scale_factor, fold_params, encoder_type)
+train_set = CityscapesGTADataset('train', low_resolution, patch_scale_factor, encoder_type)
 train_loader = DataLoader(train_set,
                           batch_size=batch_size,
                           shuffle=True,
                           drop_last=True)
-val_set = CityscapesGTADataset('val', full_resolution, low_resolution, patch_scale_factor, fold_params, encoder_type)
+val_set = CityscapesGTADataset('val', low_resolution, patch_scale_factor, encoder_type)
 val_loader = DataLoader(val_set,
                         batch_size=1,
                         shuffle=False)
@@ -91,7 +86,7 @@ seg_loss_fn = nn.CrossEntropyLoss(ignore_index=255).cuda()
 for epoch in range(max_epochs):
     model.train()
     for i, data in enumerate(train_loader):
-        low_res_synth_img, encoder_img, seg_lb, full_res_synth_patch, full_res_noise_patch, low_res_noise, synth_patch_index, real_patch, synth_name, real_name = data
+        low_res_synth_img, encoder_img, seg_lb, full_res_synth_patch, full_res_noise_patch, low_res_noise, synth_patch_index, real_patch, synth_name, real_name, (original_h, original_w) = data
         low_res_synth_img, encoder_img, seg_lb, full_res_synth_patch, full_res_noise_patch, low_res_noise = low_res_synth_img.cuda(), encoder_img.cuda(), seg_lb.long().cuda(), full_res_synth_patch.cuda(), full_res_noise_patch.cuda(), low_res_noise.cuda()
 
         if encoder_type == 'fcn':

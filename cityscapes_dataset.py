@@ -20,17 +20,15 @@ class CityscapesGTADataset(data.Dataset):
     ''' Dataset for GTA->Cityscapes translation
     '''
 
-    def __init__(self, mode, full_resolution, low_resolution, patch_scale_factor, fold_params, encoder_type):
+    def __init__(self, mode, low_resolution, patch_scale_factor, encoder_type):
         self.city_root = "/raid/datasets/cityscapes"
         self.gta_root = "/raid/datasets/GTA"
         self.mode = mode
         assert self.mode in ["train", "val", "generate"]
         self.synth_files = collections.defaultdict(list)
         self.real_files = collections.defaultdict(list)
-        self.full_resolution = full_resolution
         self.low_resolution = low_resolution
         self.patch_scale_factor = patch_scale_factor
-        self.fold_params = fold_params
         self.encoder_type = encoder_type
 
         if self.mode == 'train':
@@ -71,9 +69,9 @@ class CityscapesGTADataset(data.Dataset):
     def __getitem__(self, index):
         '''
         During training:
-            return small res synthetic image, full res synthetic patch, patch_index, full res real patch, synth name, real name
+            return small res synthetic image, encoder input image, full res synthetic patch, patch_index, full res real patch, synth name, real name, (original image height, original image width)
         During validation and generation:
-            return small res synthetic image, full res synthetic patches, synth name
+            return small res synthetic image, encoder input image, full res synthetic patches, synth name, (original image height, original image width)
         '''
         img_transform = transforms.Compose([
             transforms.ToTensor(),
@@ -83,9 +81,13 @@ class CityscapesGTADataset(data.Dataset):
         # Synthetics
         synth_datafiles = self.synth_files[self.mode][index]
         synth_img = Image.open(synth_datafiles["image"]).convert('RGB')
+        w, h = synth_img.size
+        fold_params = {"kernel_size": (h//self.patch_scale_factor, w//self.patch_scale_factor),
+                       "stride": (h//self.patch_scale_factor, w//self.patch_scale_factor)}
         low_res_synth_img = synth_img.resize(self.low_resolution[::-1])
         low_res_synth_img = img_transform(low_res_synth_img)
         if self.encoder_type == 'segformer':
+            # Segformer spatially downsamples by 4. To get desired low-resolution output dims, upsample by 4
             encoder_img = synth_img.resize([4 * self.low_resolution[0], 4 * self.low_resolution[1]][::-1])
             encoder_img = transforms.Compose([
                 transforms.ToTensor(),
@@ -93,11 +95,14 @@ class CityscapesGTADataset(data.Dataset):
             ])(encoder_img)
         else:
             encoder_img = low_res_synth_img
-        full_res_synth_img = synth_img.resize(self.full_resolution[::-1])
-        full_res_synth_img = img_transform(full_res_synth_img)
-        full_res_synth_patches = nn.Unfold(**self.fold_params)(full_res_synth_img.unsqueeze(0))
+        full_res_synth_img = img_transform(synth_img)
+        full_res_synth_patches = nn.Unfold(**fold_params)(full_res_synth_img.unsqueeze(0))
+
+
         synth_patch_index = np.random.randint(0, full_res_synth_patches.shape[-1])
-        full_res_synth_patch = full_res_synth_patches[:, :, synth_patch_index].reshape(3, self.fold_params['kernel_size'][0], self.fold_params['kernel_size'][1])
+        full_res_synth_patch = full_res_synth_patches[:, :, synth_patch_index].reshape(3,
+                                                                                       fold_params['kernel_size'][0],
+                                                                                       fold_params['kernel_size'][1])
 
         # Load synthetic labels
         lb = Image.open(synth_datafiles["label"]).convert('P')
@@ -107,25 +112,27 @@ class CityscapesGTADataset(data.Dataset):
 
         # Corresponding noise patches for transformation
         noise = torch.load('gaussian_3ch.pt')
-        full_res_noise = noise.resize(3, self.full_resolution[0], self.full_resolution[1])
-        full_res_noise_patches = nn.Unfold(**self.fold_params)(full_res_noise.unsqueeze(0))
-        full_res_noise_patch = full_res_noise_patches[:, :, synth_patch_index].reshape(3, self.fold_params['kernel_size'][0], self.fold_params['kernel_size'][1])
-        low_res_noise = F.interpolate(torch.load('gaussian_3ch.pt').unsqueeze(0), self.low_resolution, mode='bilinear', align_corners=False)[0]
+        full_res_noise = F.interpolate(noise.unsqueeze(0), (h, w), mode='bilinear', align_corners=False)
+        full_res_noise_patches = nn.Unfold(**fold_params)(full_res_noise)
+        full_res_noise_patch = full_res_noise_patches[:, :, synth_patch_index].reshape(3,
+                                                                                       fold_params['kernel_size'][0],
+                                                                                       fold_params['kernel_size'][1])
+        low_res_noise = F.interpolate(torch.load('gaussian_3ch.pt').unsqueeze(0), self.low_resolution, mode='bilinear',
+                                      align_corners=False)[0]
 
         if self.mode == 'train':
             # Real
             real_datafiles = self.real_files[self.mode][index % len(self.real_files[self.mode])]
             real_img = Image.open(real_datafiles["image"]).convert('RGB')
-            real_img = real_img.resize(self.full_resolution[::-1])
             real_img = img_transform(real_img)
-            real_img_patches = nn.Unfold(**self.fold_params)(real_img.unsqueeze(0))
+            real_img_patches = nn.Unfold(**fold_params)(real_img.unsqueeze(0))
             real_patch_index = np.random.randint(0, real_img_patches.shape[-1])
-            real_patch = real_img_patches[:, :, real_patch_index].reshape(3, self.fold_params['kernel_size'][0], self.fold_params['kernel_size'][1])
+            real_patch = real_img_patches[:, :, real_patch_index].reshape(3, fold_params['kernel_size'][0], fold_params['kernel_size'][1])
 
             if self.visualize_crops:
                 to_pil_image(transforms.RandomCrop((70, 70))(transforms.ToTensor()(synth_img))).save('debug/synth_crop{}.png'.format(synth_datafiles['image'].split('/')[-1][:-4]))
                 to_pil_image(transforms.RandomCrop((70, 70))(transforms.ToTensor()(Image.open(real_datafiles["image"]).convert('RGB')))).save('debug/real_crop{}.png'.format(real_datafiles['image'].split('/')[-1][:-4]))
 
-            return low_res_synth_img, encoder_img, lb, full_res_synth_patch, full_res_noise_patch, low_res_noise, synth_patch_index, real_patch, synth_datafiles["image"], real_datafiles["image"]
+            return low_res_synth_img, encoder_img, lb, full_res_synth_patch, full_res_noise_patch, low_res_noise, synth_patch_index, real_patch, synth_datafiles["image"], real_datafiles["image"], (h, w)
         else:
-            return low_res_synth_img, encoder_img, lb, full_res_synth_patches, full_res_noise_patches, synth_datafiles["image"]
+            return low_res_synth_img, encoder_img, lb, full_res_synth_patches, full_res_noise_patches, synth_datafiles["image"], (h, w)
